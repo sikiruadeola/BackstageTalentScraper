@@ -115,26 +115,7 @@ function buildPageUrl(baseUrl: string, pageNumber: number): string {
     return url.toString();
 }
 
-async function discoverPeople(
-    page: Page,
-    pageNumber: number,
-    baseUrl: string,
-): Promise<Person[]> {
-    const url = buildPageUrl(baseUrl, pageNumber);
-
-    console.log('\n==============================');
-    console.log(`OPENING TALENT PAGE ${pageNumber}`);
-    console.log('==============================');
-
-    await page.goto(url, {
-        waitUntil: 'domcontentloaded',
-        timeout: NAVIGATION_TIMEOUT,
-    });
-
-    console.log('Waiting for Backstage results...');
-    await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => undefined);
-    await page.waitForTimeout(randomJitterMs(1_500, 1_500));
-
+async function extractPeopleFromCurrentPage(page: Page, pageNumber: number): Promise<Person[]> {
     console.log(`FINAL URL: ${page.url()}`);
     const pageTitle = await page.title().catch(() => '');
     console.log(`TITLE: ${pageTitle}`);
@@ -144,9 +125,6 @@ async function discoverPeople(
         throw new Error('Blocked by Cloudflare while loading this page.');
     }
 
-    // Each talent card links to that person's own profile page. Cards live
-    // under the browse/listing path, so any link into that same area that
-    // is not just the bare browse URL itself is treated as a profile link.
     const links = page.locator('a[href*="/talent/"]');
     const count = await links.count();
 
@@ -177,6 +155,29 @@ async function discoverPeople(
     console.log(`UNIQUE PEOPLE FOUND ON PAGE ${pageNumber}: ${people.length}`);
 
     return people;
+}
+
+async function discoverPeople(
+    page: Page,
+    pageNumber: number,
+    baseUrl: string,
+): Promise<Person[]> {
+    const url = buildPageUrl(baseUrl, pageNumber);
+
+    console.log('\n==============================');
+    console.log(`OPENING TALENT PAGE ${pageNumber}`);
+    console.log('==============================');
+
+    await page.goto(url, {
+        waitUntil: 'domcontentloaded',
+        timeout: NAVIGATION_TIMEOUT,
+    });
+
+    console.log('Waiting for Backstage results...');
+    await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => undefined);
+    await page.waitForTimeout(randomJitterMs(1_500, 1_500));
+
+    return extractPeopleFromCurrentPage(page, pageNumber);
 }
 
 async function captureDiagnosticsOnce(page: Page, tag: string): Promise<void> {
@@ -276,6 +277,7 @@ await Actor.init();
 let browser: Browser | null = null;
 let context: BrowserContext | null = null;
 let listPage!: Page;
+let firstPagePeople: Person[] | null = null;
 
 try {
     const input = (await Actor.getInput()) as Input | null;
@@ -362,16 +364,19 @@ try {
 
         try {
             const probePage = await context.newPage();
-            console.log('Checking Backstage authentication with the real first page load...');
-            await probePage.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: NAVIGATION_TIMEOUT });
+            const firstUrl = buildPageUrl(startUrl, state.cursor);
+            console.log('Loading the real first page, this doubles as both the login check and page one.');
+            console.log('\n==============================');
+            console.log(`OPENING TALENT PAGE ${state.cursor}`);
+            console.log('==============================');
+
+            await probePage.goto(firstUrl, { waitUntil: 'domcontentloaded', timeout: NAVIGATION_TIMEOUT });
             await probePage.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => undefined);
             await probePage.waitForTimeout(1_500);
 
             const probeTitle = await probePage.title().catch(() => '');
-            console.log(`AUTH URL: ${probePage.url()}`);
-            console.log(`AUTH TITLE: ${probeTitle}`);
-
             const lowerProbeTitle = probeTitle.toLowerCase();
+
             if (lowerProbeTitle.includes('attention required') || lowerProbeTitle.includes('just a moment') || lowerProbeTitle.includes('cloudflare')) {
                 await captureDiagnosticsOnce(probePage, `auth-attempt-${attempt}`);
                 await probePage.close().catch(() => undefined);
@@ -384,10 +389,8 @@ try {
             }
 
             console.log('Backstage authentication check passed.');
-            // Reuse this exact same page as the first real listing page,
-            // instead of closing it and opening a fresh one to hit the
-            // identical URL again a moment later.
             listPage = probePage;
+            firstPagePeople = await extractPeopleFromCurrentPage(probePage, state.cursor);
             break;
         } catch (error) {
             const isConnectionIssue =
@@ -452,7 +455,14 @@ try {
     let pagesThisRun = 0;
 
     while (maxPages === 0 || pagesThisRun < maxPages) {
-        let people = await discoverPeopleWithRecovery(pageNumber);
+        let people: Person[];
+
+        if (firstPagePeople !== null) {
+            people = firstPagePeople;
+            firstPagePeople = null;
+        } else {
+            people = await discoverPeopleWithRecovery(pageNumber);
+        }
 
         if (people.length === 0) {
             console.log(`Page ${pageNumber} came back empty, retrying once before trusting that.`);
