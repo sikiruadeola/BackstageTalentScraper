@@ -50,10 +50,6 @@ function normalizeText(value: string | null | undefined): string {
     return (value ?? '').replace(/\s+/g, ' ').trim();
 }
 
-function randomJitterMs(baseMs: number, spreadMs: number): number {
-    return baseMs + Math.floor(Math.random() * spreadMs);
-}
-
 // Cloudflare's own behavioural checks specifically flag traffic that moves
 // at a perfectly even, mechanical pace. A real person looking at a talent
 // profile spends real time reading it before moving on, several seconds at
