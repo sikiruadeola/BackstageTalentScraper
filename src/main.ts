@@ -164,7 +164,13 @@ async function discoverPeople(
     await page.waitForTimeout(randomJitterMs(1_500, 1_500));
 
     console.log(`FINAL URL: ${page.url()}`);
-    console.log(`TITLE: ${await page.title().catch(() => '')}`);
+    const pageTitle = await page.title().catch(() => '');
+    console.log(`TITLE: ${pageTitle}`);
+
+    const lowerTitle = pageTitle.toLowerCase();
+    if (lowerTitle.includes('attention required') || lowerTitle.includes('just a moment') || lowerTitle.includes('cloudflare')) {
+        throw new Error('Blocked by Cloudflare while loading this page.');
+    }
 
     // Each talent card links to that person's own profile page. Cards live
     // under the browse/listing path, so any link into that same area that
@@ -297,6 +303,7 @@ await Actor.init();
 
 let browser: Browser | null = null;
 let context: BrowserContext | null = null;
+let listPage: Page;
 
 try {
     const input = (await Actor.getInput()) as Input | null;
@@ -381,16 +388,36 @@ try {
         browser = launched.browser;
         context = launched.context;
 
-        const authPage = await context.newPage();
-
         try {
-            await verifyAuthentication(authPage, buildPageUrl(startUrl, state.cursor));
-            await authPage.close().catch(() => undefined);
+            const probePage = await context.newPage();
+            console.log('Checking Backstage authentication with the real first page load...');
+            await probePage.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: NAVIGATION_TIMEOUT });
+            await probePage.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => undefined);
+            await probePage.waitForTimeout(1_500);
+
+            const probeTitle = await probePage.title().catch(() => '');
+            console.log(`AUTH URL: ${probePage.url()}`);
+            console.log(`AUTH TITLE: ${probeTitle}`);
+
+            const lowerProbeTitle = probeTitle.toLowerCase();
+            if (lowerProbeTitle.includes('attention required') || lowerProbeTitle.includes('just a moment') || lowerProbeTitle.includes('cloudflare')) {
+                await captureDiagnosticsOnce(probePage, `auth-attempt-${attempt}`);
+                await probePage.close().catch(() => undefined);
+                throw new Error('Blocked by Cloudflare on the first page load.');
+            }
+
+            if (lowerProbeTitle.includes('log in') || lowerProbeTitle.includes('sign in')) {
+                await probePage.close().catch(() => undefined);
+                throw new Error('Backstage session appears to be unauthenticated or expired.');
+            }
+
+            console.log('Backstage authentication check passed.');
+            // Reuse this exact same page as the first real listing page,
+            // instead of closing it and opening a fresh one to hit the
+            // identical URL again a moment later.
+            listPage = probePage;
             break;
         } catch (error) {
-            await captureDiagnosticsOnce(authPage, `auth-attempt-${attempt}`);
-            await authPage.close().catch(() => undefined);
-
             const isConnectionIssue =
                 errorMessage(error).includes('Timeout') ||
                 errorMessage(error).includes('ERR_TIMED_OUT') ||
@@ -412,7 +439,6 @@ try {
         throw new Error('Browser context was not established after all launch attempts.');
     }
 
-    let listPage = await context.newPage();
     let profilePage = await context.newPage();
 
     async function relaunchWithFreshProxy(): Promise<void> {
