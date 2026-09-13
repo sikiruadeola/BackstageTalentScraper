@@ -54,6 +54,16 @@ function randomJitterMs(baseMs: number, spreadMs: number): number {
     return baseMs + Math.floor(Math.random() * spreadMs);
 }
 
+// Cloudflare's own behavioural checks specifically flag traffic that moves
+// at a perfectly even, mechanical pace. A real person looking at a talent
+// profile spends real time reading it before moving on, several seconds at
+// minimum, not one or two. This waits a genuinely human feeling stretch,
+// with real randomness in it, not a small fixed jitter.
+async function humanPause(page: Page, minMs: number, maxMs: number): Promise<void> {
+    const waitMs = minMs + Math.floor(Math.random() * (maxMs - minMs));
+    await page.waitForTimeout(waitMs);
+}
+
 function resolveAuthState(inputAuthState: unknown): unknown {
     if (
         inputAuthState !== undefined &&
@@ -139,6 +149,12 @@ async function extractPeopleFromCurrentPage(page: Page, pageNumber: number): Pro
 
         if (!href) continue;
         if (href.includes('profile_type=') || href.includes('skill_groups=')) continue;
+        if (href.includes('/find-talent/') || href.includes('/talent-database') || href.includes('/post-a-job')) continue;
+
+        // Real profile links carry an actual slug segment after /talent/,
+        // category and navigation links are much shorter, fixed paths.
+        const pathSegments = new URL(href, 'https://www.backstage.com').pathname.split('/').filter(Boolean);
+        if (pathSegments.length < 2) continue;
 
         const profileUrl = new URL(href, page.url()).toString().split('?')[0];
 
@@ -175,7 +191,7 @@ async function discoverPeople(
 
     console.log('Waiting for Backstage results...');
     await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => undefined);
-    await page.waitForTimeout(randomJitterMs(1_500, 1_500));
+    await humanPause(page, 3_000, 6_000);
 
     return extractPeopleFromCurrentPage(page, pageNumber);
 }
@@ -236,7 +252,7 @@ async function processProfile(page: Page, person: Person): Promise<PersonRecord 
         });
 
         await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => undefined);
-        await page.waitForTimeout(randomJitterMs(1_200, 1_500));
+        await humanPause(page, 3_000, 6_000);
 
         console.log(`PROFILE URL: ${page.url()}`);
 
@@ -500,7 +516,7 @@ try {
 
             console.log(`PROGRESS: processed=${totalProcessed}, saved=${totalSaved}`);
 
-            await profilePage.waitForTimeout(randomJitterMs(800, 2_200));
+            await humanPause(profilePage, 8_000, 20_000);
         }
 
         pageNumber++;
