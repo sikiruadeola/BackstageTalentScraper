@@ -147,6 +147,11 @@ async function extractPeopleFromCurrentPage(page: Page, pageNumber: number): Pro
         if (href.includes('profile_type=') || href.includes('skill_groups=')) continue;
         if (href.includes('/find-talent/') || href.includes('/talent-database') || href.includes('/post-a-job')) continue;
 
+        // A bare "/talent/" with nothing after it is the listing page
+        // linking back to itself, not a real person's profile.
+        const strippedPath = new URL(href, 'https://www.backstage.com').pathname.replace(/\/+$/, '');
+        if (strippedPath === '/talent') continue;
+
         const profileUrl = new URL(href, page.url()).toString().split('?')[0];
 
         if (seenOnPage.has(profileUrl)) continue;
