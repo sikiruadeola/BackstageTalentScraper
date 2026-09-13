@@ -3,7 +3,6 @@ import {
     chromium,
     type Browser,
     type BrowserContext,
-    type Locator,
     type Page,
 } from 'playwright';
 
