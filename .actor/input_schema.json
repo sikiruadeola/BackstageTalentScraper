@@ -1,0 +1,39 @@
+{
+    "$schema": "https://apify.com/schemas/v1/input.ide.json",
+    "title": "Backstage Talent Scraper",
+    "description": "Walks the Backstage Talent Database and saves each crew profile's link, name, and any contact links found. Remembers where it left off between runs.",
+    "type": "object",
+    "schemaVersion": 1,
+    "properties": {
+        "startUrl": {
+            "title": "Backstage Talent Search URL",
+            "type": "string",
+            "description": "Paste the exact Backstage talent search URL with your filters applied.",
+            "editor": "textfield"
+        },
+        "authState": {
+            "title": "Backstage Authentication State (optional)",
+            "type": "string",
+            "description": "Leave blank to use the session already built into the actor. Only fill this in to run under a different session.",
+            "editor": "textarea",
+            "isSecret": true
+        },
+        "maxPages": {
+            "title": "Maximum Pages This Run",
+            "type": "integer",
+            "description": "Stop this run after this many pages. Use 0 for unlimited.",
+            "editor": "number",
+            "default": 0,
+            "minimum": 0
+        },
+        "maxProfiles": {
+            "title": "Maximum Profiles This Run",
+            "type": "integer",
+            "description": "Stop this run after this many profiles. Use 0 for unlimited.",
+            "editor": "number",
+            "default": 0,
+            "minimum": 0
+        }
+    },
+    "required": ["startUrl"]
+}

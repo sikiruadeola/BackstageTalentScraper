@@ -1,0 +1,10 @@
+{
+    "actorSpecification": 1,
+    "name": "backstage-talent-scraper",
+    "title": "Backstage Talent Scraper",
+    "description": "Walks the Backstage Talent Database and saves each crew profile's link, name, and contact links found.",
+    "version": "0.0",
+    "meta": { "templateId": "ts-playwright" },
+    "input": "./input_schema.json",
+    "dockerfile": "../Dockerfile"
+}
