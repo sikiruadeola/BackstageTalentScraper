@@ -94,10 +94,6 @@ function parseAuthState(value: unknown): unknown {
     }
 }
 
-async function isVisible(locator: Locator): Promise<boolean> {
-    return locator.isVisible().catch(() => false);
-}
-
 async function loadState(): Promise<RunState> {
     const store = await Actor.openKeyValueStore(STATE_STORE_NAME);
     const saved = await store.getValue<RunState>(STATE_KEY);
