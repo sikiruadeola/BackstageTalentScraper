@@ -151,11 +151,6 @@ async function extractPeopleFromCurrentPage(page: Page, pageNumber: number): Pro
         if (href.includes('profile_type=') || href.includes('skill_groups=')) continue;
         if (href.includes('/find-talent/') || href.includes('/talent-database') || href.includes('/post-a-job')) continue;
 
-        // Real profile links carry an actual slug segment after /talent/,
-        // category and navigation links are much shorter, fixed paths.
-        const pathSegments = new URL(href, 'https://www.backstage.com').pathname.split('/').filter(Boolean);
-        if (pathSegments.length < 2) continue;
-
         const profileUrl = new URL(href, page.url()).toString().split('?')[0];
 
         if (seenOnPage.has(profileUrl)) continue;
@@ -481,8 +476,8 @@ try {
         }
 
         if (people.length === 0) {
-            console.log(`Page ${pageNumber} came back empty, retrying once before trusting that.`);
-            await listPage.waitForTimeout(randomJitterMs(2_000, 2_000));
+            console.log(`Page ${pageNumber} came back empty, waiting a real stretch before trusting that.`);
+            await humanPause(listPage, 15_000, 25_000);
             people = await discoverPeopleWithRecovery(pageNumber);
         }
 
