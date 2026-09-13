@@ -115,34 +115,6 @@ function buildPageUrl(baseUrl: string, pageNumber: number): string {
     return url.toString();
 }
 
-async function verifyAuthentication(page: Page, startUrl: string): Promise<void> {
-    console.log('Checking Backstage authentication...');
-
-    await page.goto(startUrl, {
-        waitUntil: 'domcontentloaded',
-        timeout: NAVIGATION_TIMEOUT,
-    });
-
-    await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => undefined);
-    await page.waitForTimeout(1_500);
-
-    const title = await page.title().catch(() => '');
-    console.log(`AUTH URL: ${page.url()}`);
-    console.log(`AUTH TITLE: ${title}`);
-
-    const lowerTitle = title.toLowerCase();
-
-    if (lowerTitle.includes('attention required') || lowerTitle.includes('just a moment') || lowerTitle.includes('cloudflare')) {
-        throw new Error('Blocked by Cloudflare before the page could load.');
-    }
-
-    if (lowerTitle.includes('log in') || lowerTitle.includes('sign in')) {
-        throw new Error('Backstage session appears to be unauthenticated or expired.');
-    }
-
-    console.log('Backstage authentication check passed.');
-}
-
 async function discoverPeople(
     page: Page,
     pageNumber: number,
@@ -303,7 +275,7 @@ await Actor.init();
 
 let browser: Browser | null = null;
 let context: BrowserContext | null = null;
-let listPage: Page;
+let listPage!: Page;
 
 try {
     const input = (await Actor.getInput()) as Input | null;
