@@ -1,7 +1,7 @@
 {
     "$schema": "https://apify.com/schemas/v1/input.ide.json",
     "title": "Backstage Talent Scraper",
-    "description": "Walks the Backstage Talent Database and saves each crew profile's link, name, and any contact links found. Remembers where it left off between runs.",
+    "description": "Walks the Backstage Talent Database and saves each profile's link, name, and any contact links found. Remembers where it left off between runs.",
     "type": "object",
     "schemaVersion": 1,
     "properties": {
@@ -12,11 +12,17 @@
             "editor": "textfield"
         },
         "authState": {
-            "title": "Backstage Authentication State (optional)",
+            "title": "Backstage cookies",
             "type": "string",
-            "description": "Leave blank to use the session already built into the actor. Only fill this in to run under a different session.",
+            "description": "Paste the full cookie export from Cookie Editor, or a Playwright storage state.",
             "editor": "textarea",
             "isSecret": true
+        },
+        "useResidentialProxy": {
+            "title": "Use residential proxy",
+            "type": "boolean",
+            "description": "Routes traffic through home style addresses so Cloudflare is less likely to block it. Costs about 8 dollars per GB.",
+            "default": true
         },
         "maxPages": {
             "title": "Maximum Pages This Run",
@@ -35,5 +41,5 @@
             "minimum": 0
         }
     },
-    "required": ["startUrl"]
+    "required": ["startUrl", "authState"]
 }
