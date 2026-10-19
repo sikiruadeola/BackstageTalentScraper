@@ -315,15 +315,15 @@ try {
     console.log(`Residential proxy: ${useResidential ? 'ON' : 'OFF'}`);
     console.log(`Already known profiles: ${seen.size}`);
 
-    let listPage: Page;
-    let profilePage: Page;
+    let listPage!: Page;
+    let profilePage!: Page;
 
     async function start(): Promise<void> {
         const launched = await launch(authState, useResidential);
         browser = launched.browser;
         context = launched.context;
-        listPage = await context.newPage();
-        profilePage = await context.newPage();
+        listPage = await launched.context.newPage();
+        profilePage = await launched.context.newPage();
     }
 
     async function stop(): Promise<void> {
