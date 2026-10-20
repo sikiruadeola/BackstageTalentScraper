@@ -1,45 +1,69 @@
 {
     "$schema": "https://apify.com/schemas/v1/input.ide.json",
-    "title": "Backstage Talent Scraper",
-    "description": "Walks the Backstage Talent Database and saves each profile's link, name, and any contact links found. Remembers where it left off between runs.",
+    "title": "Backstage Email Finder",
+    "description": "Walks the Backstage Talent Database through ScraperAPI, opens each profile, follows the person's own website links and saves emails with a confidence grade. Saves progress and rotates through several ScraperAPI and Reoon keys.",
     "type": "object",
     "schemaVersion": 1,
     "properties": {
         "startUrl": {
             "title": "Backstage Talent Search URL",
             "type": "string",
-            "description": "Paste the exact Backstage talent search URL with your filters applied.",
+            "description": "The Backstage talent search URL with your filters applied.",
             "editor": "textfield"
         },
-        "authState": {
+        "backstageCookie": {
             "title": "Backstage cookies",
             "type": "string",
-            "description": "Paste the full cookie export from Cookie Editor, or a Playwright storage state.",
+            "description": "Paste the Cookie Editor export, or a cookie header like sessionid=...; csrftoken=...",
             "editor": "textarea",
             "isSecret": true
         },
-        "useResidentialProxy": {
-            "title": "Use residential proxy",
-            "type": "boolean",
-            "description": "Routes traffic through home style addresses so Cloudflare is less likely to block it. Costs about 8 dollars per GB.",
-            "default": true
+        "scraperApiKeys": {
+            "title": "ScraperAPI keys",
+            "type": "array",
+            "description": "One or more ScraperAPI keys. When one runs out the next is used.",
+            "editor": "stringList",
+            "isSecret": true
+        },
+        "reoonKeys": {
+            "title": "Reoon keys (optional)",
+            "type": "array",
+            "description": "One or more Reoon email verifier keys. Used to check that a mailbox really exists.",
+            "editor": "stringList",
+            "isSecret": true
+        },
+        "startPage": {
+            "title": "Start page (optional)",
+            "type": "integer",
+            "description": "Leave empty to continue from the saved page.",
+            "editor": "number",
+            "minimum": 1
         },
         "maxPages": {
-            "title": "Maximum Pages This Run",
+            "title": "Maximum pages this run",
             "type": "integer",
-            "description": "Stop this run after this many pages. Use 0 for unlimited.",
+            "description": "Use 0 for unlimited.",
             "editor": "number",
             "default": 0,
             "minimum": 0
         },
         "maxProfiles": {
-            "title": "Maximum Profiles This Run",
+            "title": "Maximum profiles this run",
             "type": "integer",
-            "description": "Stop this run after this many profiles. Use 0 for unlimited.",
+            "description": "Use 0 for unlimited.",
             "editor": "number",
             "default": 0,
             "minimum": 0
+        },
+        "concurrency": {
+            "title": "Profiles at once",
+            "type": "integer",
+            "description": "1 to 5. ScraperAPI trials allow 5 at once.",
+            "editor": "number",
+            "default": 3,
+            "minimum": 1,
+            "maximum": 5
         }
     },
-    "required": ["startUrl", "authState"]
+    "required": ["startUrl", "backstageCookie", "scraperApiKeys"]
 }
