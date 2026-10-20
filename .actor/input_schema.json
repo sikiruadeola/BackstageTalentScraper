@@ -21,15 +21,15 @@
         "scraperApiKeys": {
             "title": "ScraperAPI keys",
             "type": "array",
-            "description": "One or more ScraperAPI keys. When one runs out the next is used.",
-            "editor": "stringList",
+            "description": "A JSON list of keys, for example [\"key1\", \"key2\"]. When one runs out the next is used.",
+            "editor": "json",
             "isSecret": true
         },
         "reoonKeys": {
             "title": "Reoon keys (optional)",
             "type": "array",
-            "description": "One or more Reoon email verifier keys. Used to check that a mailbox really exists.",
-            "editor": "stringList",
+            "description": "A JSON list of Reoon email verifier keys. Used to check that a mailbox really exists.",
+            "editor": "json",
             "isSecret": true
         },
         "startPage": {
