@@ -10,6 +10,21 @@ interface Input {
     concurrency?: number;
 }
 
+interface Project {
+    url: string;
+    name: string;
+    creatorKey: string;
+    state: string;
+    location: string;
+    category: string;
+    goal: number;
+    pledged: number;
+    percentFunded: number;
+    backers: number;
+    currency: string;
+    deadline: string;
+}
+
 interface Creator {
     name: string;
     profileUrl: string;
@@ -18,7 +33,6 @@ interface Creator {
     location: string;
     websites: string[];
     launched: number;
-    title: string;
 }
 
 interface RunState {
@@ -48,8 +62,9 @@ interface EmailRow {
     foundOn: string;
 }
 
-const STATE_KEY = 'KICKSTARTER_EMAIL_STATE';
-const STATE_STORE_NAME = 'kickstarter-email-progress';
+const STATE_KEY = 'KICKSTARTER_EMAIL_STATE_V2';
+const STATE_STORE_NAME = 'kickstarter-email-progress-v2';
+const PAGE_SIZE = 12;
 
 const SKIP = [
     'kickstarter.com', 'kck.st', 'instagram.com', 'facebook.com', 'fb.com', 'linkedin.com', 'youtube.com',
@@ -79,7 +94,7 @@ const JUNK = [
 const STOP_TOKENS = [
     'the', 'and', 'productions', 'production', 'studio', 'studios', 'films', 'film', 'media', 'official',
     'entertainment', 'photography', 'pictures', 'creative', 'music', 'video', 'llc', 'inc', 'labs', 'tech',
-    'games', 'game', 'team', 'works', 'design',
+    'games', 'game', 'team', 'works', 'design', 'with', 'for', 'your', 'from', 'that', 'this',
 ];
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
 
@@ -201,60 +216,92 @@ async function getPage(url: string, render: boolean): Promise<string | null> {
     return null;
 }
 
-function listingUrl(categoryId: string, state: string, page: number): string {
-    return `https://www.kickstarter.com/discover/advanced?category_id=${encodeURIComponent(categoryId)}&state=${encodeURIComponent(state)}&sort=newest&page=${page}`;
+interface RawProject {
+    name?: string;
+    state?: string;
+    goal?: number | string;
+    pledged?: number | string;
+    percent_funded?: number;
+    backers_count?: number;
+    currency?: string;
+    deadline?: number;
+    static_usd_rate?: number;
+    creator?: { slug?: string; name?: string };
+    location?: { displayable_name?: string };
+    category?: { name?: string };
+    urls?: { web?: { project?: string } };
 }
 
-function parseProjectLinks(html: string): string[] {
-    const out = new Set<string>();
-    for (const m of html.matchAll(/https:\/\/www\.kickstarter\.com\/projects\/([^\/"'?\s<]+)\/([^\/"'?\s<]+)/g)) {
-        if (m[1] === 'feed.atom' || /^\d+$/.test(m[2])) continue;
-        out.add(`https://www.kickstarter.com/projects/${m[1]}/${m[2]}`);
-    }
-    return Array.from(out);
-}
+async function fetchListing(categoryId: string, state: string, page: number): Promise<{ projects: Project[]; total: number }> {
+    const url =
+        `https://www.kickstarter.com/discover/advanced.json?category_id=${encodeURIComponent(categoryId)}` +
+        `&state=${encodeURIComponent(state)}&sort=newest&page=${page}`;
 
-async function fetchListing(categoryId: string, state: string, page: number): Promise<string[]> {
     for (let attempt = 0; attempt < 2; attempt++) {
-        const r = await sa(listingUrl(categoryId, state, page), { render: true });
-        if (r.status === 200) {
-            const links = parseProjectLinks(r.text);
-            if (links.length > 0) return links;
+        const r = await sa(url, { render: true });
+        if (r.status !== 200) continue;
+
+        const start = r.text.indexOf('{"projects"');
+        const end = r.text.lastIndexOf('}');
+        if (start < 0 || end <= start) continue;
+
+        try {
+            const json = JSON.parse(r.text.slice(start, end + 1)) as { projects?: RawProject[]; total_hits?: number };
+            const projects: Project[] = [];
+            for (const p of json.projects ?? []) {
+                const projectUrl = p.urls?.web?.project;
+                if (!projectUrl) continue;
+                const pathPart = /\/projects\/([^/]+)\//.exec(projectUrl)?.[1] ?? projectUrl;
+                const rate = Number(p.static_usd_rate ?? 1);
+                projects.push({
+                    url: projectUrl.split('?')[0],
+                    name: p.name ?? '',
+                    creatorKey: (p.creator?.slug ?? pathPart).toLowerCase(),
+                    state: p.state ?? '',
+                    location: p.location?.displayable_name ?? '',
+                    category: p.category?.name ?? '',
+                    goal: Math.round(Number(p.goal ?? 0) * rate),
+                    pledged: Math.round(Number(p.pledged ?? 0) * rate),
+                    percentFunded: Math.round(Number(p.percent_funded ?? 0)),
+                    backers: Number(p.backers_count ?? 0),
+                    currency: 'USD',
+                    deadline: p.deadline ? new Date(p.deadline * 1000).toISOString().slice(0, 10) : '',
+                });
+            }
+            return { projects, total: Number(json.total_hits ?? 0) };
+        } catch {
+            // try again
         }
     }
-    return [];
-}
-
-function creatorOfUrl(projectUrl: string): string {
-    const m = /\/projects\/([^/]+)\//.exec(projectUrl);
-    return m ? m[1].toLowerCase() : projectUrl;
+    return { projects: [], total: 0 };
 }
 
 function parseCreatorTab(html: string): Creator | null {
     const u = decodeEntities(html)
         .replace(/\\"/g, '"')
         .replace(/\\+u([0-9a-fA-F]{4})/g, (_m, h: string) => String.fromCharCode(parseInt(h, 16)));
-    const m =
-        /"creator":\{"id":"[^"]*","name":"([^"]*)"[\s\S]*?"url":"([^"]*)"[\s\S]*?"biography":"([\s\S]*?)","isFacebookConnected"[\s\S]*?"displayableName":"([^"]*)"[\s\S]*?"launchedProjects":\{"totalCount":(\d+)\},"websites":\[([\s\S]*?)\]\}/.exec(u);
-    if (!m) return null;
+    const start = u.indexOf('"creator":{"id"');
+    if (start < 0) {
+        console.log(`No creator block found (page length ${html.length}).`);
+        return null;
+    }
+    const scope = u.slice(start, start + 9000);
+    const name = /"creator":\{"id":"[^"]*","name":"([^"]*)"/.exec(scope)?.[1];
+    if (!name) {
+        console.log(`Creator name not readable: ${scope.slice(0, 160)}`);
+        return null;
+    }
 
-    const profileUrl = m[2];
-    const slug = (/\/profile\/([^/?"]+)/.exec(profileUrl)?.[1] ?? m[1]).toLowerCase();
-    const bio = m[3].replace(/\\+[rn]/g, ' ').replace(/\s+/g, ' ').trim();
-    const websites = Array.from(new Set(Array.from(m[6].matchAll(/https?:\/\/[^"\\\s]+/g)).map((x) => x[0])));
-    const titleMatch = /<title>([\s\S]*?)<\/title>/i.exec(html);
-    const title = decodeEntities(titleMatch ? titleMatch[1] : '').split(' by ')[0].trim();
+    const profileUrl = /"url":"(https:\/\/www\.kickstarter\.com\/profile\/[^"]*)"/.exec(scope)?.[1] ?? '';
+    const slug = (/\/profile\/([^/?"]+)/.exec(profileUrl)?.[1] ?? name).toLowerCase();
+    const bioRaw = /"biography":(?:null|"([\s\S]*?)","isFacebookConnected")/.exec(scope)?.[1] ?? '';
+    const bio = bioRaw.replace(/\\+[rn]/g, ' ').replace(/\s+/g, ' ').trim();
+    const location = /"displayableName":"([^"]*)"/.exec(scope)?.[1] ?? '';
+    const websitesBlock = /"websites":\[([\s\S]*?)\]/.exec(scope)?.[1] ?? '';
+    const websites = Array.from(new Set(Array.from(websitesBlock.matchAll(/https?:\/\/[^"\\\s]+/g)).map((x) => x[0])));
+    const launched = Number(/"launchedProjects":\{"totalCount":(\d+)\}/.exec(scope)?.[1] ?? 0);
 
-    return {
-        name: m[1],
-        profileUrl,
-        slug,
-        bio,
-        location: m[4],
-        websites,
-        launched: Number(m[5]),
-        title,
-    };
+    return { name, profileUrl, slug, bio, location, websites, launched };
 }
 
 function cleanEmail(raw: string): string | null {
@@ -327,7 +374,7 @@ function pageCandidates(site: string, html: string): string[] {
 function nameTokens(...sources: string[]): string[] {
     const tokens = new Set<string>();
     for (const source of sources) {
-        for (const t of source.toLowerCase().match(/[a-z]{3,}/g) ?? []) {
+        for (const t of source.toLowerCase().match(/[a-z]{4,}/g) ?? []) {
             if (!STOP_TOKENS.includes(t)) tokens.add(t);
         }
     }
@@ -374,7 +421,7 @@ async function reoonVerify(email: string): Promise<Mailbox> {
             const text = await res.text();
             if (!reoonLogged) {
                 reoonLogged = true;
-                console.log(`First Reoon response (check the format): ${text.slice(0, 400)}`);
+                console.log(`First Reoon response: ${text.slice(0, 600)}`);
             }
             let json: { status?: string; reason?: string; message?: string } = {};
             try {
@@ -413,7 +460,7 @@ function decideTier(x: {
     return 'C';
 }
 
-async function investigate(creator: Creator): Promise<EmailRow[]> {
+async function investigate(creator: Creator, projectName: string): Promise<EmailRow[]> {
     const bioUrls = Array.from(creator.bio.matchAll(/https?:\/\/[^\s"'<>)]+/g)).map((m) => m[0]);
     const sites = Array.from(new Set([...creator.websites, ...bioUrls]))
         .filter((l) => !SKIP.some((s) => hostOf(l).includes(s)))
@@ -487,7 +534,7 @@ async function investigate(creator: Creator): Promise<EmailRow[]> {
         f.confirmed = html !== null && extractEmails(html).some((x) => x.email === email);
     }
 
-    const tokens = nameTokens(creator.name, creator.slug, creator.title);
+    const tokens = nameTokens(creator.name, creator.slug, projectName);
     const siteRoots = new Set(sites.map((s) => rootDomain(hostOf(s))));
     const rows: EmailRow[] = [];
 
@@ -497,14 +544,15 @@ async function investigate(creator: Creator): Promise<EmailRow[]> {
         const nameMatch = tokens.some((t) => localLetters.includes(t));
         const domainMatch = siteRoots.has(rootDomain(domain));
         const free = FREEMAIL.includes(domain);
-        const strong = ['mailto', 'cfemail', 'jsonld'].some((m) => f.methods.has(m)) || f.pages.size >= 2 || Array.from(f.pages.values()).includes('bio');
+        const fromBio = Array.from(f.pages.values()).includes('bio');
+        const strong = ['mailto', 'cfemail', 'jsonld'].some((m) => f.methods.has(m)) || f.pages.size >= 2 || fromBio;
         const generic = GENERIC.includes(localLetters);
 
         let mailbox: Mailbox = 'unchecked';
         const mx = await hasMx(domain);
         if (mx === false) {
             mailbox = 'invalid';
-        } else if (nameMatch || domainMatch || free || Array.from(f.pages.values()).includes('bio')) {
+        } else if (nameMatch || domainMatch || free || fromBio) {
             mailbox = await reoonVerify(email);
         }
 
@@ -580,12 +628,12 @@ try {
 
                 while (!stop && (maxPages === 0 || pagesDone < maxPages)) {
                     console.log(`\nLISTING category ${categoryId}, ${campaignState}, page ${page}`);
-                    const urls = await fetchListing(categoryId, campaignState, page);
-                    console.log(`Projects found: ${urls.length}`);
+                    const { projects, total } = await fetchListing(categoryId, campaignState, page);
+                    console.log(`Projects found: ${projects.length} (list total ${total})`);
 
-                    if (urls.length === 0) {
+                    if (projects.length === 0) {
                         emptyPages++;
-                        if (emptyPages >= 2) {
+                        if (emptyPages >= 2 || page > Math.ceil(total / PAGE_SIZE) + 1) {
                             console.log('End of this list. The next run starts it again from page 1.');
                             state.cursors[listKey] = 1;
                             await saveState({ cursors: state.cursors, processed: Array.from(processed) });
@@ -596,7 +644,7 @@ try {
                     }
                     emptyPages = 0;
 
-                    const todo = urls.filter((u) => !processed.has(creatorOfUrl(u)));
+                    const todo = projects.filter((p) => !processed.has(p.creatorKey));
 
                     for (let i = 0; i < todo.length; i += concurrency) {
                         if (maxCreators > 0 && totalCreators >= maxCreators) {
@@ -607,31 +655,34 @@ try {
                         const batch = todo.slice(i, i + concurrency).slice(0, room);
 
                         const counts = await Promise.all(
-                            batch.map(async (projectUrl) => {
-                                const html = await getPage(`${projectUrl}/creator`, true);
+                            batch.map(async (project) => {
+                                const html = await getPage(`${project.url}/creator`, true);
                                 if (!html) {
-                                    console.log(`Could not load creator tab for ${projectUrl}.`);
+                                    console.log(`Could not load creator tab for ${project.url}.`);
                                     return 0;
                                 }
                                 const creator = parseCreatorTab(html);
                                 if (!creator) {
-                                    console.log(`Could not read creator data for ${projectUrl}.`);
+                                    console.log(`Could not read creator data for ${project.url}.`);
                                     return 0;
                                 }
-                                if (processed.has(creator.slug)) return 0;
-                                processed.add(creator.slug);
 
-                                const rows = await investigate(creator);
+                                const rows = await investigate(creator, project.name);
                                 const keep = rows.filter((r) => r.tier === 'A' || r.tier === 'B');
                                 for (const r of keep) {
                                     await Actor.pushData({
                                         creator: creator.name,
                                         kickstarterProfile: creator.profileUrl,
-                                        project: creator.title,
-                                        projectUrl,
-                                        campaignState,
-                                        categoryId,
-                                        location: creator.location,
+                                        project: project.name,
+                                        projectUrl: project.url,
+                                        campaignState: project.state,
+                                        category: project.category,
+                                        location: project.location || creator.location,
+                                        goalUsd: project.goal,
+                                        pledgedUsd: project.pledged,
+                                        percentFunded: project.percentFunded,
+                                        backers: project.backers,
+                                        deadline: project.deadline,
                                         email: r.email,
                                         tier: r.tier,
                                         type: r.type,
@@ -649,7 +700,7 @@ try {
                             }),
                         );
 
-                        for (const u of batch) processed.add(creatorOfUrl(u));
+                        for (const p of batch) processed.add(p.creatorKey);
                         totalCreators += batch.length;
                         totalEmails += counts.reduce((a, b) => a + b, 0);
                         state.cursors[listKey] = page;
