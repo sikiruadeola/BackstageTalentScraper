@@ -8,6 +8,7 @@ interface Input {
     maxPagesPerList?: number;
     maxCreators?: number;
     concurrency?: number;
+    maxPercentFunded?: number;
 }
 
 interface Project {
@@ -603,6 +604,8 @@ try {
     const maxPages = Math.max(0, Number(input.maxPagesPerList ?? 0));
     const maxCreators = Math.max(0, Number(input.maxCreators ?? 0));
     const concurrency = Math.min(5, Math.max(1, Number(input.concurrency ?? 3)));
+    // campaigns already past this percent funded are skipped (default: only campaigns that are not yet funded)
+    const maxPercentFunded = Number(input.maxPercentFunded ?? 99);
 
     const state = await loadState();
     const processed = new Set(state.processed);
@@ -611,11 +614,13 @@ try {
     console.log('KICKSTARTER EMAIL FINDER');
     console.log('==============================');
     console.log(`Categories: ${categories.join(', ')} | States: ${states.join(', ')}`);
+    console.log(`Only campaigns at or below ${maxPercentFunded} percent funded.`);
     console.log(`ScraperAPI keys: ${keys.length}, Reoon keys: ${input.reoonKeys?.length ?? 0}, concurrency: ${concurrency}`);
     console.log(`Creators already done: ${processed.size}`);
 
     let totalCreators = 0;
     let totalEmails = 0;
+    let skippedFunded = 0;
     let stop = false;
 
     try {
@@ -645,7 +650,10 @@ try {
                     }
                     emptyPages = 0;
 
-                    const todo = projects.filter((p) => !processed.has(p.creatorKey));
+                    const notFunded = projects.filter((p) => p.percentFunded <= maxPercentFunded);
+                    skippedFunded += projects.length - notFunded.length;
+                    const todo = notFunded.filter((p) => !processed.has(p.creatorKey));
+                    console.log(`Not funded yet and new: ${todo.length} (skipped as funded so far: ${skippedFunded})`);
 
                     for (let i = 0; i < todo.length; i += concurrency) {
                         if (maxCreators > 0 && totalCreators >= maxCreators) {
@@ -729,6 +737,7 @@ try {
     console.log('FINISHED');
     console.log('==============================');
     console.log(`Creators processed this run: ${totalCreators}`);
+    console.log(`Campaigns skipped because they were already funded: ${skippedFunded}`);
     console.log(`Emails saved: ${totalEmails}`);
     console.log(`ScraperAPI credits used this run: ${creditsUsed}`);
 } catch (error) {
