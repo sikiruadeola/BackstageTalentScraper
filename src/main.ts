@@ -280,9 +280,10 @@ function parseCreatorTab(html: string): Creator | null {
     const u = decodeEntities(html)
         .replace(/\\"/g, '"')
         .replace(/\\+u([0-9a-fA-F]{4})/g, (_m, h: string) => String.fromCharCode(parseInt(h, 16)));
-    const start = u.indexOf('"creator":{"id"');
+    // the profile block has a text id (the project block has a numeric id), so look for the quoted id
+    const start = u.indexOf('"creator":{"id":"');
     if (start < 0) {
-        console.log(`No creator block found (page length ${html.length}).`);
+        console.log(`No creator profile block found (page length ${html.length}).`);
         return null;
     }
     const scope = u.slice(start, start + 9000);
