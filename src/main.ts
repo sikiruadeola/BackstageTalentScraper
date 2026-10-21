@@ -1,28 +1,28 @@
 import { Actor } from 'apify';
 
 interface Input {
-    startUrl: string;
-    backstageCookie: string;
+    categoryIds?: string[];
+    states?: string[];
     scraperApiKeys: string[];
     reoonKeys?: string[];
-    startPage?: number;
-    maxPages?: number;
-    maxProfiles?: number;
+    maxPagesPerList?: number;
+    maxCreators?: number;
     concurrency?: number;
 }
 
-interface Card {
-    id: string;
+interface Creator {
     name: string;
-}
-
-interface Panel {
-    profile: string | null;
-    links: string[];
+    profileUrl: string;
+    slug: string;
+    bio: string;
+    location: string;
+    websites: string[];
+    launched: number;
+    title: string;
 }
 
 interface RunState {
-    cursor: number;
+    cursors: Record<string, number>;
     processed: string[];
 }
 
@@ -48,14 +48,15 @@ interface EmailRow {
     foundOn: string;
 }
 
-const STATE_KEY = 'BACKSTAGE_EMAIL_STATE';
-const STATE_STORE_NAME = 'backstage-email-progress';
+const STATE_KEY = 'KICKSTARTER_EMAIL_STATE';
+const STATE_STORE_NAME = 'kickstarter-email-progress';
 
 const SKIP = [
-    'instagram.com', 'facebook.com', 'fb.com', 'linkedin.com', 'youtube.com', 'youtu.be', 'tiktok.com',
-    'twitter.com', 'x.com', 'vimeo.com', 'imdb.com', 'drive.google.com', 'docs.google.com', 'spotify.com',
-    'soundcloud.com', 'pinterest.com', 'snapchat.com', 'twitch.tv', 'threads.net', 'behance.net',
-    'patreon.com', 'amazon.com', 'apple.com', 'bit.ly', 'wa.me',
+    'kickstarter.com', 'kck.st', 'instagram.com', 'facebook.com', 'fb.com', 'linkedin.com', 'youtube.com',
+    'youtu.be', 'tiktok.com', 'twitter.com', 'x.com', 'vimeo.com', 'imdb.com', 'drive.google.com',
+    'docs.google.com', 'spotify.com', 'soundcloud.com', 'pinterest.com', 'snapchat.com', 'twitch.tv',
+    'threads.net', 'behance.net', 'patreon.com', 'amazon.com', 'apple.com', 'bit.ly', 'wa.me', 'discord.gg',
+    'discord.com', 'github.com', 'medium.com', 'reddit.com', 'google.com',
 ];
 const HUBS = [
     'linktr.ee', 'beacons.ai', 'bio.link', 'carrd.co', 'linkin.bio', 'allmylinks.com', 'campsite.bio',
@@ -73,12 +74,12 @@ const GENERIC = [
 const JUNK = [
     'sentry', 'wixpress', 'example.', 'domain.com', 'yourdomain', 'schema.org', 'w3.org', 'godaddy',
     'squarespace.com', 'wordpress', 'sample.', 'test.com', 'email.com', 'yoursite', 'mysite', 'company.com',
-    'cloudflare', 'jquery', 'gravatar',
+    'cloudflare', 'jquery', 'gravatar', 'kickstarter.com',
 ];
 const STOP_TOKENS = [
-    'crew', 'the', 'and', 'productions', 'production', 'studio', 'studios', 'films', 'film', 'media',
-    'official', 'entertainment', 'photography', 'photographer', 'pictures', 'creative', 'music', 'video',
-    'llc', 'inc',
+    'the', 'and', 'productions', 'production', 'studio', 'studios', 'films', 'film', 'media', 'official',
+    'entertainment', 'photography', 'pictures', 'creative', 'music', 'video', 'llc', 'inc', 'labs', 'tech',
+    'games', 'game', 'team', 'works', 'design',
 ];
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
 
@@ -159,46 +160,19 @@ function rootDomain(host: string): string {
     return parts.slice(-2).join('.');
 }
 
-function toCookieHeader(raw: string): string {
-    const text = raw.trim();
-    if (!text.startsWith('[')) return text;
-    const list = JSON.parse(text) as Array<{ name: string; value: string; domain?: string }>;
-    return list
-        .filter((c) => !c.domain || c.domain.includes('backstage.com'))
-        .map((c) => `${c.name}=${c.value}`)
-        .join('; ');
-}
-
-function buildPageUrl(baseUrl: string, pageNumber: number): string {
-    const url = new URL(baseUrl);
-    url.searchParams.set('page', String(pageNumber));
-    return url.toString();
-}
-
 async function sa(
     url: string,
-    opts: { render?: boolean; cookie?: string; instructions?: unknown; waitFor?: string },
+    opts: { render?: boolean },
 ): Promise<{ status: number; text: string }> {
     for (let attempt = 0; attempt < 5; attempt++) {
         const key = saPool.current();
         if (!key) throw new AllKeysExhausted('No working ScraperAPI keys left.');
 
         const params = new URLSearchParams({ api_key: key, url });
-        const headers: Record<string, string> = {};
         if (opts.render) params.set('render', 'true');
-        if (opts.waitFor) params.set('wait_for_selector', opts.waitFor);
-        if (opts.cookie) {
-            params.set('keep_headers', 'true');
-            headers['Cookie'] = opts.cookie;
-        }
-        if (opts.instructions) {
-            params.set('keep_headers', 'true');
-            headers['x-sapi-instruction_set'] = JSON.stringify(opts.instructions);
-        }
 
         try {
             const res = await fetch(`https://api.scraperapi.com/?${params.toString()}`, {
-                headers,
                 signal: AbortSignal.timeout(150_000),
             });
             const text = await res.text();
@@ -227,58 +201,60 @@ async function getPage(url: string, render: boolean): Promise<string | null> {
     return null;
 }
 
-function parseCards(html: string): Card[] {
-    const cards: Card[] = [];
-    const re = /name="talent-profile-id"[^>]*value="(\d+)"[\s\S]*?tw-font-header-bold[^>]*>([\s\S]*?)<\/div>/g;
-    for (const m of html.matchAll(re)) {
-        const name = decodeEntities(m[2].replace(/<[^>]+>/g, '')).trim();
-        cards.push({ id: m[1], name });
-    }
-    return cards;
+function listingUrl(categoryId: string, state: string, page: number): string {
+    return `https://www.kickstarter.com/discover/advanced?category_id=${encodeURIComponent(categoryId)}&state=${encodeURIComponent(state)}&sort=newest&page=${page}`;
 }
 
-async function fetchListing(startUrl: string, cookie: string, pageNumber: number): Promise<Card[]> {
-    for (let attempt = 0; attempt < 3; attempt++) {
-        const r = await sa(buildPageUrl(startUrl, pageNumber), {
-            render: true,
-            cookie,
-            waitFor: '.profile-card',
-        });
+function parseProjectLinks(html: string): string[] {
+    const out = new Set<string>();
+    for (const m of html.matchAll(/https:\/\/www\.kickstarter\.com\/projects\/([^\/"'?\s<]+)\/([^\/"'?\s<]+)/g)) {
+        if (m[1] === 'feed.atom' || /^\d+$/.test(m[2])) continue;
+        out.add(`https://www.kickstarter.com/projects/${m[1]}/${m[2]}`);
+    }
+    return Array.from(out);
+}
+
+async function fetchListing(categoryId: string, state: string, page: number): Promise<string[]> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+        const r = await sa(listingUrl(categoryId, state, page), { render: true });
         if (r.status === 200) {
-            const cards = parseCards(r.text);
-            if (cards.length > 0) return cards;
+            const links = parseProjectLinks(r.text);
+            if (links.length > 0) return links;
         }
     }
     return [];
 }
 
-async function fetchPanel(startUrl: string, cookie: string, pageNumber: number, n: number): Promise<Panel> {
-    const xp = `(//div[contains(@class,'profile-card')]//div[contains(@class,'tw-font-header-bold')])[${n}]`;
-    const instructions = [
-        { type: 'wait_for_selector', selector: { type: 'css', value: '.profile-card' }, timeout: 20 },
-        { type: 'click', selector: { type: 'xpath', value: xp } },
-        { type: 'wait', value: 5 },
-    ];
+function creatorOfUrl(projectUrl: string): string {
+    const m = /\/projects\/([^/]+)\//.exec(projectUrl);
+    return m ? m[1].toLowerCase() : projectUrl;
+}
 
-    for (let attempt = 0; attempt < 3; attempt++) {
-        const r = await sa(buildPageUrl(startUrl, pageNumber), { render: true, cookie, instructions });
-        if (r.status !== 200) continue;
+function parseCreatorTab(html: string): Creator | null {
+    const u = decodeEntities(html)
+        .replace(/\\"/g, '"')
+        .replace(/\\+u([0-9a-fA-F]{4})/g, (_m, h: string) => String.fromCharCode(parseInt(h, 16)));
+    const m =
+        /"creator":\{"id":"[^"]*","name":"([^"]*)"[\s\S]*?"url":"([^"]*)"[\s\S]*?"biography":"([\s\S]*?)","isFacebookConnected"[\s\S]*?"displayableName":"([^"]*)"[\s\S]*?"launchedProjects":\{"totalCount":(\d+)\},"websites":\[([\s\S]*?)\]\}/.exec(u);
+    if (!m) return null;
 
-        const html = r.text;
-        const link = /<a href="(\/[^"]*)"[^>]*>View profile in a new tab/.exec(html);
-        const i = html.indexOf('id="profilelinks"');
-        const links: string[] = [];
-        if (i >= 0) {
-            for (const m of html.slice(i, i + 4000).matchAll(/href="([^"]+)"/g)) {
-                const href = decodeEntities(m[1]);
-                if (href.startsWith('http') && !href.includes('backstage.com') && !links.includes(href)) {
-                    links.push(href);
-                }
-            }
-        }
-        return { profile: link ? `https://www.backstage.com${link[1]}` : null, links };
-    }
-    return { profile: null, links: [] };
+    const profileUrl = m[2];
+    const slug = (/\/profile\/([^/?"]+)/.exec(profileUrl)?.[1] ?? m[1]).toLowerCase();
+    const bio = m[3].replace(/\\+[rn]/g, ' ').replace(/\s+/g, ' ').trim();
+    const websites = Array.from(new Set(Array.from(m[6].matchAll(/https?:\/\/[^"\\\s]+/g)).map((x) => x[0])));
+    const titleMatch = /<title>([\s\S]*?)<\/title>/i.exec(html);
+    const title = decodeEntities(titleMatch ? titleMatch[1] : '').split(' by ')[0].trim();
+
+    return {
+        name: m[1],
+        profileUrl,
+        slug,
+        bio,
+        location: m[4],
+        websites,
+        launched: Number(m[5]),
+        title,
+    };
 }
 
 function cleanEmail(raw: string): string | null {
@@ -348,15 +324,9 @@ function pageCandidates(site: string, html: string): string[] {
     return unique.slice(0, 3);
 }
 
-function nameTokens(name: string, profileUrl: string): string[] {
+function nameTokens(...sources: string[]): string[] {
     const tokens = new Set<string>();
-    let path = '';
-    try {
-        path = new URL(profileUrl).pathname;
-    } catch {
-        path = '';
-    }
-    for (const source of [name, path]) {
+    for (const source of sources) {
         for (const t of source.toLowerCase().match(/[a-z]{3,}/g) ?? []) {
             if (!STOP_TOKENS.includes(t)) tokens.add(t);
         }
@@ -443,8 +413,9 @@ function decideTier(x: {
     return 'C';
 }
 
-async function investigate(name: string, profileUrl: string, links: string[]): Promise<EmailRow[]> {
-    const sites = links
+async function investigate(creator: Creator): Promise<EmailRow[]> {
+    const bioUrls = Array.from(creator.bio.matchAll(/https?:\/\/[^\s"'<>)]+/g)).map((m) => m[0]);
+    const sites = Array.from(new Set([...creator.websites, ...bioUrls]))
         .filter((l) => !SKIP.some((s) => hostOf(l).includes(s)))
         .slice(0, 3);
     const evidence = new Map<string, Found>();
@@ -463,6 +434,9 @@ async function investigate(name: string, profileUrl: string, links: string[]): P
             f.pages.set(url, how);
         }
     };
+
+    // emails the creator wrote in their own Kickstarter biography
+    add(creator.bio, creator.profileUrl, 'bio');
 
     const queue = [...sites];
     const seen = new Set<string>();
@@ -505,11 +479,15 @@ async function investigate(name: string, profileUrl: string, links: string[]): P
     // second independent pass: fetch one page per email again and make sure it is still there
     for (const [email, f] of evidence) {
         const [url, how] = Array.from(f.pages.entries())[0];
+        if (how === 'bio') {
+            f.confirmed = true;
+            continue;
+        }
         const html = await getPage(url, how === 'rendered');
         f.confirmed = html !== null && extractEmails(html).some((x) => x.email === email);
     }
 
-    const tokens = nameTokens(name, profileUrl);
+    const tokens = nameTokens(creator.name, creator.slug, creator.title);
     const siteRoots = new Set(sites.map((s) => rootDomain(hostOf(s))));
     const rows: EmailRow[] = [];
 
@@ -519,14 +497,14 @@ async function investigate(name: string, profileUrl: string, links: string[]): P
         const nameMatch = tokens.some((t) => localLetters.includes(t));
         const domainMatch = siteRoots.has(rootDomain(domain));
         const free = FREEMAIL.includes(domain);
-        const strong = ['mailto', 'cfemail', 'jsonld'].some((m) => f.methods.has(m)) || f.pages.size >= 2;
+        const strong = ['mailto', 'cfemail', 'jsonld'].some((m) => f.methods.has(m)) || f.pages.size >= 2 || Array.from(f.pages.values()).includes('bio');
         const generic = GENERIC.includes(localLetters);
 
         let mailbox: Mailbox = 'unchecked';
         const mx = await hasMx(domain);
         if (mx === false) {
             mailbox = 'invalid';
-        } else if (nameMatch || domainMatch || free) {
+        } else if (nameMatch || domainMatch || free || Array.from(f.pages.values()).includes('bio')) {
             mailbox = await reoonVerify(email);
         }
 
@@ -552,7 +530,7 @@ async function investigate(name: string, profileUrl: string, links: string[]): P
 async function loadState(): Promise<RunState> {
     const store = await Actor.openKeyValueStore(STATE_STORE_NAME);
     const saved = await store.getValue<RunState>(STATE_KEY);
-    return saved ?? { cursor: 1, processed: [] };
+    return saved ?? { cursors: {}, processed: [] };
 }
 
 async function saveState(state: RunState): Promise<void> {
@@ -564,107 +542,128 @@ await Actor.init();
 
 try {
     const input = (await Actor.getInput()) as Input | null;
-    if (!input || !input.startUrl) throw new Error('startUrl is required.');
-    if (!input.backstageCookie) throw new Error('backstageCookie is required.');
+    if (!input) throw new Error('Input is required.');
     const keys = (input.scraperApiKeys ?? []).map((k) => k.trim()).filter((k) => k.length > 0);
     if (keys.length === 0) throw new Error('Add at least one ScraperAPI key.');
 
     saPool = new KeyPool(keys, 'ScraperAPI');
     reoonPool = new KeyPool((input.reoonKeys ?? []).map((k) => k.trim()).filter((k) => k.length > 0), 'Reoon');
 
-    const cookie = toCookieHeader(input.backstageCookie);
-    const startUrl = input.startUrl.trim();
-    const maxPages = Math.max(0, Number(input.maxPages ?? 0));
-    const maxProfiles = Math.max(0, Number(input.maxProfiles ?? 0));
+    const categories = (input.categoryIds && input.categoryIds.length > 0 ? input.categoryIds : ['16']).map(String);
+    const states = input.states && input.states.length > 0 ? input.states : ['live', 'upcoming'];
+    const maxPages = Math.max(0, Number(input.maxPagesPerList ?? 0));
+    const maxCreators = Math.max(0, Number(input.maxCreators ?? 0));
     const concurrency = Math.min(5, Math.max(1, Number(input.concurrency ?? 3)));
 
     const state = await loadState();
     const processed = new Set(state.processed);
-    let pageNumber = input.startPage && input.startPage > 0 ? input.startPage : state.cursor;
 
     console.log('==============================');
-    console.log('BACKSTAGE EMAIL FINDER');
+    console.log('KICKSTARTER EMAIL FINDER');
     console.log('==============================');
-    console.log(`Starting at page ${pageNumber}, ${processed.size} profiles already done.`);
+    console.log(`Categories: ${categories.join(', ')} | States: ${states.join(', ')}`);
     console.log(`ScraperAPI keys: ${keys.length}, Reoon keys: ${input.reoonKeys?.length ?? 0}, concurrency: ${concurrency}`);
+    console.log(`Creators already done: ${processed.size}`);
 
-    let totalProcessed = 0;
+    let totalCreators = 0;
     let totalEmails = 0;
-    let emptyPages = 0;
-    let pagesDone = 0;
     let stop = false;
 
     try {
-        while (!stop && (maxPages === 0 || pagesDone < maxPages)) {
-            console.log(`\nOPENING PAGE ${pageNumber}`);
-            const cards = await fetchListing(startUrl, cookie, pageNumber);
-            console.log(`Cards found: ${cards.length}`);
+        for (const categoryId of categories) {
+            for (const campaignState of states) {
+                if (stop) break;
+                const listKey = `${categoryId}:${campaignState}`;
+                let page = state.cursors[listKey] ?? 1;
+                let emptyPages = 0;
+                let pagesDone = 0;
 
-            if (cards.length === 0) {
-                emptyPages++;
-                if (emptyPages >= 2) {
-                    console.log('Two empty pages in a row. Treating this as the end of the list.');
-                    break;
-                }
-                pageNumber++;
-                continue;
-            }
-            emptyPages = 0;
+                while (!stop && (maxPages === 0 || pagesDone < maxPages)) {
+                    console.log(`\nLISTING category ${categoryId}, ${campaignState}, page ${page}`);
+                    const urls = await fetchListing(categoryId, campaignState, page);
+                    console.log(`Projects found: ${urls.length}`);
 
-            const todo = cards
-                .map((card, i) => ({ card, n: i + 1 }))
-                .filter((x) => !processed.has(x.card.id));
-
-            for (let i = 0; i < todo.length; i += concurrency) {
-                if (maxProfiles > 0 && totalProcessed >= maxProfiles) {
-                    stop = true;
-                    break;
-                }
-                const room = maxProfiles > 0 ? maxProfiles - totalProcessed : undefined;
-                const batch = todo.slice(i, i + concurrency).slice(0, room);
-
-                const counts = await Promise.all(
-                    batch.map(async ({ card, n }) => {
-                        const panel = await fetchPanel(startUrl, cookie, pageNumber, n);
-                        if (!panel.profile) {
-                            console.log(`No profile panel for ${card.name}.`);
-                            return 0;
+                    if (urls.length === 0) {
+                        emptyPages++;
+                        if (emptyPages >= 2) {
+                            console.log('End of this list. The next run starts it again from page 1.');
+                            state.cursors[listKey] = 1;
+                            await saveState({ cursors: state.cursors, processed: Array.from(processed) });
+                            break;
                         }
-                        const rows = panel.links.length > 0 ? await investigate(card.name, panel.profile, panel.links) : [];
-                        const keep = rows.filter((r) => r.tier === 'A' || r.tier === 'B');
-                        for (const r of keep) {
-                            await Actor.pushData({
-                                name: card.name,
-                                backstageProfile: panel.profile,
-                                discoveryPage: pageNumber,
-                                email: r.email,
-                                tier: r.tier,
-                                type: r.type,
-                                basis: r.basis,
-                                nameMatch: r.nameMatch,
-                                mailboxCheck: r.mailbox,
-                                confirmedTwice: r.confirmed,
-                                methods: r.methods,
-                                foundOn: r.foundOn,
-                                profileLinks: panel.links,
-                            });
+                        page++;
+                        continue;
+                    }
+                    emptyPages = 0;
+
+                    const todo = urls.filter((u) => !processed.has(creatorOfUrl(u)));
+
+                    for (let i = 0; i < todo.length; i += concurrency) {
+                        if (maxCreators > 0 && totalCreators >= maxCreators) {
+                            stop = true;
+                            break;
                         }
-                        console.log(`${card.name}: ${panel.links.length} links, ${keep.length} email(s) kept, ${rows.length - keep.length} dropped.`);
-                        return keep.length;
-                    }),
-                );
+                        const room = maxCreators > 0 ? maxCreators - totalCreators : undefined;
+                        const batch = todo.slice(i, i + concurrency).slice(0, room);
 
-                for (const { card } of batch) processed.add(card.id);
-                totalProcessed += batch.length;
-                totalEmails += counts.reduce((a, b) => a + b, 0);
-                await saveState({ cursor: pageNumber, processed: Array.from(processed) });
-                console.log(`PROGRESS: profiles=${totalProcessed}, emails=${totalEmails}, credits used=${creditsUsed}`);
+                        const counts = await Promise.all(
+                            batch.map(async (projectUrl) => {
+                                const html = await getPage(`${projectUrl}/creator`, true);
+                                if (!html) {
+                                    console.log(`Could not load creator tab for ${projectUrl}.`);
+                                    return 0;
+                                }
+                                const creator = parseCreatorTab(html);
+                                if (!creator) {
+                                    console.log(`Could not read creator data for ${projectUrl}.`);
+                                    return 0;
+                                }
+                                if (processed.has(creator.slug)) return 0;
+                                processed.add(creator.slug);
+
+                                const rows = await investigate(creator);
+                                const keep = rows.filter((r) => r.tier === 'A' || r.tier === 'B');
+                                for (const r of keep) {
+                                    await Actor.pushData({
+                                        creator: creator.name,
+                                        kickstarterProfile: creator.profileUrl,
+                                        project: creator.title,
+                                        projectUrl,
+                                        campaignState,
+                                        categoryId,
+                                        location: creator.location,
+                                        email: r.email,
+                                        tier: r.tier,
+                                        type: r.type,
+                                        basis: r.basis,
+                                        nameMatch: r.nameMatch,
+                                        mailboxCheck: r.mailbox,
+                                        confirmedTwice: r.confirmed,
+                                        methods: r.methods,
+                                        foundOn: r.foundOn,
+                                        websites: creator.websites,
+                                    });
+                                }
+                                console.log(`${creator.name}: ${creator.websites.length} websites, ${keep.length} email(s) kept, ${rows.length - keep.length} dropped.`);
+                                return keep.length;
+                            }),
+                        );
+
+                        for (const u of batch) processed.add(creatorOfUrl(u));
+                        totalCreators += batch.length;
+                        totalEmails += counts.reduce((a, b) => a + b, 0);
+                        state.cursors[listKey] = page;
+                        await saveState({ cursors: state.cursors, processed: Array.from(processed) });
+                        console.log(`PROGRESS: creators=${totalCreators}, emails=${totalEmails}, credits used=${creditsUsed}`);
+                    }
+
+                    if (stop) break;
+                    page++;
+                    pagesDone++;
+                    state.cursors[listKey] = page;
+                    await saveState({ cursors: state.cursors, processed: Array.from(processed) });
+                }
             }
-
-            if (stop) break;
-            pageNumber++;
-            pagesDone++;
-            await saveState({ cursor: pageNumber, processed: Array.from(processed) });
         }
     } catch (error) {
         if (error instanceof AllKeysExhausted) {
@@ -677,7 +676,7 @@ try {
     console.log('\n==============================');
     console.log('FINISHED');
     console.log('==============================');
-    console.log(`Profiles processed this run: ${totalProcessed}`);
+    console.log(`Creators processed this run: ${totalCreators}`);
     console.log(`Emails saved: ${totalEmails}`);
     console.log(`ScraperAPI credits used this run: ${creditsUsed}`);
 } catch (error) {
