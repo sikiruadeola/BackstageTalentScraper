@@ -1,54 +1,50 @@
 {
     "$schema": "https://apify.com/schemas/v1/input.ide.json",
-    "title": "Backstage Email Finder",
-    "description": "Walks the Backstage Talent Database through ScraperAPI, opens each profile, follows the person's own website links and saves emails with a confidence grade. Saves progress and rotates through several ScraperAPI and Reoon keys.",
+    "title": "Kickstarter Email Finder",
+    "description": "Finds live and upcoming Kickstarter campaigns, reads each creator's website and bio, searches the sites for emails and grades every email. Saves progress and rotates through several ScraperAPI and Reoon keys.",
     "type": "object",
     "schemaVersion": 1,
     "properties": {
-        "startUrl": {
-            "title": "Backstage Talent Search URL",
-            "type": "string",
-            "description": "The Backstage talent search URL with your filters applied.",
-            "editor": "textfield"
+        "categoryIds": {
+            "title": "Kickstarter category ids",
+            "type": "array",
+            "description": "Technology is 16, Film and Video is 11, Games is 12, Design is 7.",
+            "editor": "stringList",
+            "default": ["16"],
+            "prefill": ["16"]
         },
-        "backstageCookie": {
-            "title": "Backstage cookies",
-            "type": "string",
-            "description": "Paste the Cookie Editor export, or a cookie header like sessionid=...; csrftoken=...",
-            "editor": "textarea",
-            "isSecret": true
+        "states": {
+            "title": "Campaign states",
+            "type": "array",
+            "description": "live, upcoming or both.",
+            "editor": "stringList",
+            "default": ["live", "upcoming"],
+            "prefill": ["live", "upcoming"]
         },
         "scraperApiKeys": {
             "title": "ScraperAPI keys",
             "type": "array",
-            "description": "A JSON list of keys, for example [\"key1\", \"key2\"]. When one runs out the next is used.",
+            "description": "A JSON list of keys. When one runs out the next is used.",
             "editor": "json",
             "isSecret": true
         },
         "reoonKeys": {
             "title": "Reoon keys (optional)",
             "type": "array",
-            "description": "A JSON list of Reoon email verifier keys. Used to check that a mailbox really exists.",
+            "description": "A JSON list of Reoon keys, used to check that a mailbox really exists.",
             "editor": "json",
             "isSecret": true
         },
-        "startPage": {
-            "title": "Start page (optional)",
+        "maxPagesPerList": {
+            "title": "Maximum pages per list this run",
             "type": "integer",
-            "description": "Leave empty to continue from the saved page.",
-            "editor": "number",
-            "minimum": 1
-        },
-        "maxPages": {
-            "title": "Maximum pages this run",
-            "type": "integer",
-            "description": "Use 0 for unlimited.",
+            "description": "Use 0 for unlimited. Each page holds about 12 campaigns.",
             "editor": "number",
             "default": 0,
             "minimum": 0
         },
-        "maxProfiles": {
-            "title": "Maximum profiles this run",
+        "maxCreators": {
+            "title": "Maximum creators this run",
             "type": "integer",
             "description": "Use 0 for unlimited.",
             "editor": "number",
@@ -56,14 +52,14 @@
             "minimum": 0
         },
         "concurrency": {
-            "title": "Profiles at once",
+            "title": "Creators at once",
             "type": "integer",
-            "description": "1 to 5. ScraperAPI trials allow 5 at once.",
+            "description": "1 to 5.",
             "editor": "number",
             "default": 3,
             "minimum": 1,
             "maximum": 5
         }
     },
-    "required": ["startUrl", "backstageCookie", "scraperApiKeys"]
+    "required": ["scraperApiKeys"]
 }
